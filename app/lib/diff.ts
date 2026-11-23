@@ -169,3 +169,27 @@ export function selectedPatch(
   if (result.length === 1) throw new Error("Select at least one changed line.");
   return result.join("\n") + "\n";
 }
+
+// Preserve the exact spelling of numbers, escapes, and duplicate object keys.
+export function formatJsonLine(source: string): string | undefined {
+  const text = source.trim();
+  if (!text.startsWith("{") && !text.startsWith("[")) return;
+  try { JSON.parse(text); } catch { return; }
+  const tokens = text.match(/"(?:\\.|[^"\\])*"|[^\s{}\[\],:"]+|[{}\[\],:]/g)!;
+  let result = "", depth = 0;
+  const newline = () => "\n" + "  ".repeat(Math.min(depth, 80));
+  for (const [i, token] of tokens.entries()) {
+    if (token === "{" || token === "[") {
+      depth++;
+      result += token;
+      if (tokens[i + 1] !== "}" && tokens[i + 1] !== "]") result += newline();
+    } else if (token === "}" || token === "]") {
+      depth--;
+      if (tokens[i - 1] !== "{" && tokens[i - 1] !== "[") result += newline();
+      result += token;
+    } else if (token === ",") result += "," + newline();
+    else if (token === ":") result += ": ";
+    else result += token;
+  }
+  return result;
+}

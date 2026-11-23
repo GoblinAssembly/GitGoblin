@@ -164,3 +164,24 @@ it('cancels obsolete large-diff workers and renders only the latest result', asy
     expect(host.textContent).not.toContain('obsolete file');
   } finally { app.unmount(); vi.unstubAllGlobals(); }
 });
+
+it('toggles JSON formatting on both sides and in unified view', async () => {
+  const previous = '{"id":9007199254740993,"id":0}';
+  const next = '{"items":[1,2]}';
+  const text = ['diff --git a/a.json b/a.json', '--- a/a.json', '+++ b/a.json', '@@ -1 +1 @@', '-' + previous, '+' + next].join('\n');
+  const { host, stop } = mount('DiffViewer', { text, mode: 'working' });
+  const click = (label: string) => Array.from(host.querySelectorAll('button')).find(button => button.textContent.trim() === label)!.click();
+  try {
+    await Vue.nextTick();
+    click('Format JSON');
+    for (const layout of ['Side by side', 'Unified']) {
+      click(layout);
+      await Vue.nextTick();
+      expect(host.querySelector('.delete code')?.textContent).toBe('{\n  "id": 9007199254740993,\n  "id": 0\n}');
+      expect(host.querySelector('.add code')?.textContent).toBe(JSON.stringify(JSON.parse(next), null, 2));
+    }
+    click('Format JSON');
+    await Vue.nextTick();
+    expect(host.querySelector('.delete code')?.textContent).toBe(previous);
+  } finally { stop(); }
+});

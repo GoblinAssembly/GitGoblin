@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { parseDiffFiles } from "~/lib/diff";
+import { formatJsonLine, parseDiffFiles } from "~/lib/diff";
 import { git } from "~/lib/native";
 import type { ContextMenuHandle } from "~/lib/context-menu";
 import {
@@ -174,6 +174,7 @@ watch(selectedFile, async () => {
   if (scroller.value) scroller.value.scrollTop = 0;
   onScroll();
 });
+const formatJson = ref(false);
 const wrapLines = ref(false);
 const fontSize = ref(11);
 const rowHeight = computed(() => fontSize.value + 12);
@@ -205,7 +206,7 @@ function scrollSide(side: "left" | "right", event: Event) {
 }
 let horizontalResize: ResizeObserver | undefined;
 watch(
-  () => [props.text, selectedFile.value, layout.value, wrapLines.value, fontSize.value],
+  () => [props.text, selectedFile.value, layout.value, wrapLines.value, formatJson.value, fontSize.value],
   async () => {
     await nextTick();
     horizontalResize?.disconnect();
@@ -286,6 +287,21 @@ watch(() => [props.text, layout.value, rowHeight.value, fontSize.value, selected
 watch([scroll, viewportHeight], () => requestGeometry());
 onUnmounted(() => geometryWorker?.terminate());
 const files = computed(() => geometry.value.files);
+const formattedJson = computed(() => {
+  const formatted = new Map<number, string>();
+  if (!formatJson.value || large.value) return formatted;
+  for (const file of files.value) for (const hunk of file.hunks) {
+    const lines = layout.value === "split"
+      ? hunk.visibleRows.flatMap(row => [row.left, row.right])
+      : hunk.visibleLines;
+    for (const line of lines) {
+      if (!line || formatted.has(line.index) || line.kind === "meta") continue;
+      const pretty = formatJsonLine(line.text.slice(1));
+      if (pretty !== undefined) formatted.set(line.index, pretty);
+    }
+  }
+  return formatted;
+});
 let jumpToChangePending = false;
 watch(
   () =>
@@ -391,6 +407,15 @@ function stage(indices?: number[], hunkStart?: number) {
         @click="wrapLines = !wrapLines"
       >
         Wrap lines
+      </AppButton>
+      <AppButton
+        class="small"
+        :aria-pressed="formatJson && !large"
+        :disabled="large"
+        :title="large ? 'JSON formatting is unavailable for large diffs' : 'Expand single-line JSON objects and arrays in this view'"
+        @click="formatJson = !formatJson"
+      >
+        Format JSON
       </AppButton>
       <AppButton
         v-if="wholeFile !== undefined"
@@ -612,8 +637,10 @@ function stage(indices?: number[], hunkStart?: number) {
                           >
                           <code
                             class="[:where(&)]:font-['Cascadia_Code',_'JetBrains_Mono',_Consolas,_monospace]"
-                            ><template
-                              v-if="
+                            ><template v-if="formattedJson.has(row[side]!.index)">{{ formattedJson.get(row[side]!.index) }}</template
+
+                              ><template
+                              v-else-if="
                                 syntax[row[side]!.index]?.[
                                   side === 'left' ? 'old' : 'next'
                                 ]
@@ -677,8 +704,10 @@ function stage(indices?: number[], hunkStart?: number) {
                       }}</span
                     ><code
                       class="[:where(&)]:font-['Cascadia_Code',_'JetBrains_Mono',_Consolas,_monospace]"
-                      ><template
-                        v-if="
+                      ><template v-if="formattedJson.has(line.index)">{{ formattedJson.get(line.index) }}</template
+
+                        ><template
+                        v-else-if="
                           syntax[line.index]?.[
                             line.kind === 'delete' ? 'old' : 'next'
                           ]
@@ -749,7 +778,7 @@ function stage(indices?: number[], hunkStart?: number) {
       <DiffOverview
         v-if="wholeFile"
         :scroller="scroller"
-        :revision="[text, layout, wrapLines, fontSize]"
+        :revision="[text, layout, wrapLines, formatJson, fontSize]"
         :changes="large ? geometry.changes : undefined"
       />
     </div>
