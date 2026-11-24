@@ -50,6 +50,8 @@ function protocolError(value: unknown): Error {
   return new Error(message(value) || "T3 rejected this request without an error description.");
 }
 
+const isSubagentThread = (thread: Json) => thread.lineage?.relationshipToParent === "subagent";
+
 function normalizeThread(thread: Json): T3Thread {
   if (!("latestTurn" in thread)) return thread as T3Thread;
   return {
@@ -243,14 +245,14 @@ export class T3Client {
               }).concat([...updates.values()]);
             } else {
               this.projects = item.snapshot.projects;
-              this.threads = item.snapshot.threads.map(normalizeThread);
+              this.threads = item.snapshot.threads.filter((thread: Json) => !isSubagentThread(thread)).map(normalizeThread);
             }
             this.legacyProtocol = "snapshotSequence" in item.snapshot && !("schemaVersion" in item.snapshot);
             this.status = "connected";
             this.failures = 0;
           } else if ((item.kind === "thread.updated" || item.kind === "thread-upserted")) {
             this.threads = this.threads.filter((t) => t.id !== item.thread.id);
-            this.threads.push({ ...normalizeThread(item.thread), ...(item.location === "archive" ? { archivedAt: item.thread.archivedAt || new Date().toISOString() } : {}) });
+            if (!isSubagentThread(item.thread)) this.threads.push({ ...normalizeThread(item.thread), ...(item.location === "archive" ? { archivedAt: item.thread.archivedAt || new Date().toISOString() } : {}) });
           } else if ((item.kind === "thread.removed" || item.kind === "thread-removed"))
             this.threads = this.threads.filter((t) => t.id !== item.threadId);
           else if ((item.kind === "project.updated" || item.kind === "project-upserted"))

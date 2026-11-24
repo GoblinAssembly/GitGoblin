@@ -1396,7 +1396,7 @@ dependencies = [
 
 [[package]]
 name = "gitgoblin"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "keyring",
  "reqwest 0.12.28",

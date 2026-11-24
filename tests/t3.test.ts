@@ -147,6 +147,19 @@ describe("T3 client contract", () => {
     client.watchThreads(['repo-a']);
     expect(socket.sent.filter(frame => frame._tag === 'Interrupt')).toEqual([{ _tag: 'Interrupt', requestId: subscriptions[1].id }]);
   });
+  it('excludes subagent conversations from shell snapshots and live updates', async () => {
+    const client = new T3Client(async () => 'ws://127.0.0.1/ws');
+    clients.push(client);
+    await client.connect();
+    const socket = FakeSocket.latest;
+    const receive = (item: unknown) => socket.receive({ _tag: 'Chunk', requestId: socket.sent[0].id, values: [item] });
+    const main = { id: 'main', title: '/root/assessment' };
+    const child = { id: 'child', lineage: { parentThreadId: main.id, relationshipToParent: 'subagent' } };
+    receive({ kind: 'snapshot', snapshot: { schemaVersion: 2, projects: [], threads: [main, child] } });
+    expect(client.threads).toEqual([main]);
+    receive({ kind: 'thread.updated', thread: child });
+    expect(client.threads).toEqual([main]);
+  });
   it('retains archived shell updates for history and removes deleted conversations', async () => {
     const client = new T3Client(async () => 'ws://127.0.0.1/ws');
     clients.push(client);
