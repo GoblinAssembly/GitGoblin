@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { isThreadRunning, repositoryThreads, repositoryThreadSelection, visibleThreads } from "../app/lib/threads";
+import { isThreadRunning, repositoryThreads, repositoryThreadSelection, threadForWindowTitles, visibleThreads } from "../app/lib/threads";
 import type { T3Thread } from "../app/lib/types";
 
 const thread = (id: string, extra: Partial<T3Thread> = {}): T3Thread => ({
@@ -53,4 +53,15 @@ it("matches pinned and active ordering regardless of update arrival order", () =
   expect(visibleThreads(items).map((t) => t.id)).toEqual(expected);
   expect(visibleThreads([...items].reverse()).map((t) => t.id)).toEqual(expected);
   expect(items[0]!.id).toBe("active-z");
+});
+
+it("follows unique T3 window titles and ignores ambiguous or missing matches", () => {
+  const projects = [{ id: "project", title: "GitGoblin", workspaceRoot: "D:/GitGoblin" }];
+  const first = thread("first", { title: "Review changes" });
+  const second = thread("second", { title: "Review changes" });
+  const window = ["GitGoblin / Review changes"];
+  expect(threadForWindowTitles(window, [first], projects)).toBe("first");
+  expect(threadForWindowTitles(["Running: Review changes - GitGoblin"], [first], projects)).toBe("first");
+  expect(threadForWindowTitles(window, [first, second], projects)).toBe("");
+  expect(threadForWindowTitles([], [first], projects)).toBe("");
 });

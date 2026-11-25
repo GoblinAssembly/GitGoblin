@@ -5,6 +5,7 @@ mod devops;
 mod preferences;
 mod shell;
 mod t3_images;
+mod t3_navigation;
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
@@ -440,6 +441,8 @@ fn main() {
             devops_pr_diff,
             devops_review_vote,
             devops_tickets,
+            t3_navigation::t3_window_titles,
+            t3_navigation::t3_open_thread,
             t3_discover,
             t3_pair,
             t3_ticket,

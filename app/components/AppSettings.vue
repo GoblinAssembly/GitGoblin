@@ -3,8 +3,8 @@ import { Check, Keyboard, Link2, LoaderCircle, Palette, X } from 'lucide-vue-nex
 import { TabsRoot, TabsList, TabsTrigger, TabsContent } from 'reka-ui';
 import { themes, type Theme } from '~/composables/useTheme';
 import { ref } from 'vue';
-const props = defineProps<{ theme: Theme; error: string; t3Connected?: boolean; t3Origin?: string; t3Error?: string; pairT3?: (pairing: string, server: string) => Promise<void>; category?: string }>();
-defineEmits<{ close: []; theme: [value: Theme] }>();
+const props = defineProps<{ syncEnabled?: boolean; syncError?: string; theme: Theme; error: string; t3Connected?: boolean; t3Origin?: string; t3Error?: string; pairT3?: (pairing: string, server: string) => Promise<void>; category?: string }>();
+defineEmits<{ sync: [enabled: boolean]; close: []; theme: [value: Theme] }>();
 const server = ref(props.t3Origin || 'http://127.0.0.1:3773');
 const pairing = ref('');
 const pairingError = ref('');
@@ -64,6 +64,8 @@ async function pair() {
                 <p>Your conversations, alongside your code.</p>
               </div>
             </div>
+            <label><span><input type="checkbox" :checked="syncEnabled" :disabled="!t3Connected && !syncEnabled" @change="$emit('sync', ($event.target as HTMLInputElement).checked)" /> Sync active thread with T3 Code</span></label>
+            <p v-if="syncError" role="alert">{{ syncError }}</p>
             <form class="flex flex-col gap-[14px] border-t border-[var(--line)] pt-[18px]" @submit.prevent="pair">
               <div>
                 <h4 class="m-0 mb-[5px] text-[12px] font-semibold">{{ t3Connected ? 'Update connection' : 'Connect your workspace' }}</h4>

@@ -32,3 +32,16 @@ export function visibleThreads(threads: T3Thread[]): T3Thread[] {
     return anchor(b) - anchor(a) || a.id.localeCompare(b.id);
   });
 }
+
+export function threadForWindowTitles(titles: string[], threads: T3Thread[], projects: T3Project[]) {
+  const matches = threads.filter(thread => {
+    if (thread.deletedAt || !thread.title?.trim()) return false;
+    const project = projects.find(p => p.id === thread.projectId);
+    const name = (project?.title ?? project?.name ?? "").trim();
+    const title = thread.title.trim();
+    const standard = name ? name + " / " + title : title;
+    const accessible = name ? title + " - " + name : title;
+    return titles.some(value => value === standard || value === accessible || value.endsWith(": " + accessible));
+  });
+  return matches.length === 1 ? matches[0]!.id : "";
+}

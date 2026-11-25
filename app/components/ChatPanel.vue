@@ -61,6 +61,7 @@ import {
   defaultConversationModel,
 } from "~/lib/chat-models";
 import { T3Client, parsePairing } from "~/lib/t3";
+import { threadForWindowTitles } from "~/lib/threads";
 import { invoke, desktop, git } from "~/lib/native";
 import type {
   T3Thread,
@@ -487,6 +488,57 @@ const requests = computed(
 const questions = computed(() => pendingQuestions(projection.value));
 watch(questions, () => void scrollToLatest(), { flush: "post" });
 const connected = computed(() => state.value === "connected");
+const syncEnabled = ref(false);
+const syncError = ref("");
+const incomingId = ref("");
+let environmentId = "";
+let navigationRevision = 0;
+onMounted(() => { syncEnabled.value = localStorage.getItem("sync-active-thread") === "true"; });
+function setThreadSync(enabled: boolean) {
+  syncError.value = "";
+  syncEnabled.value = enabled;
+  localStorage.setItem("sync-active-thread", String(enabled));
+}
+watch([connected, syncEnabled, origin], ([online, enabled], _, cleanup) => {
+  environmentId = "";
+  if (!online || !enabled || !desktop()) return;
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout>;
+  let lastWindowId = "";
+  cleanup(() => { stopped = true; clearTimeout(timer); });
+  async function poll() {
+    const revision = navigationRevision;
+    try {
+      if (!environmentId) {
+        const config = await client.call("server.getConfig", {});
+        if (stopped) return;
+        if (!config.environment?.environmentId) throw new Error("T3 Code did not provide an environment ID.");
+        environmentId = config.environment.environmentId;
+      }
+      const titles = await invoke<string[]>("t3_window_titles");
+      if (stopped || revision !== navigationRevision) return;
+      const id = threadForWindowTitles(titles, threads.value, projects.value);
+      if (id && id !== lastWindowId && id !== selectedId.value) {
+        incomingId.value = id;
+        select(id);
+      }
+      lastWindowId = id;
+    } catch (error) {
+      if (!stopped) syncError.value = String(error);
+    } finally {
+      if (!stopped) timer = setTimeout(poll, 900);
+    }
+  }
+  void poll();
+});
+watch(selectedId, id => {
+  const incoming = incomingId.value === id;
+  incomingId.value = "";
+  if (incoming || !id || !environmentId || !syncEnabled.value || !connected.value) return;
+  ++navigationRevision;
+  void invoke("t3_open_thread", { environmentId, threadId: id })
+    .catch(error => { syncError.value = String(error); });
+});
 watch(
   [skillMenuOpen, () => JSON.stringify(skillScope.value)],
   () => void loadSkills(),
@@ -892,6 +944,7 @@ onUnmounted(() => {
   client.disconnect();
 });
 defineExpose({
+  syncEnabled, syncError, setThreadSync,
   pair,
   origin,
   connectionError: computed(() => connected.value ? '' : error.value),

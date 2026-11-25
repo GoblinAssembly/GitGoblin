@@ -1396,7 +1396,7 @@ dependencies = [
 
 [[package]]
 name = "gitgoblin"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "keyring",
  "reqwest 0.12.28",
@@ -1409,6 +1409,7 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-updater",
  "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

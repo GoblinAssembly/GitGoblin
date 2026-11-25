@@ -554,6 +554,8 @@ watch(workspaceMode, async (mode, previous) => {
 });
 const context = ref(""),
   chat = ref<{
+    syncEnabled: boolean; syncError: string;
+    setThreadSync: (enabled: boolean) => void;
     settle: (id: string) => Promise<void>;
     newConversation: (trigger?: HTMLButtonElement) => void;
     pair: (pairing: string, server: string) => Promise<void>;
@@ -2642,7 +2644,7 @@ onUnmounted(() => {
       </AppButton>
     </div>
     <ContextMenu ref="sidebarMenu" @error="error = $event" />
-    <AppSettings v-if="settingsOpen" :theme="theme" :error="themeError" :t3-connected="t3Connected" :t3-origin="chat?.origin" :t3-error="chat?.connectionError" :pair-t3="chat?.pair" :category="settingsCategory" @theme="setTheme" @close="settingsOpen = false; settingsCategory = 'appearance'" />
+    <AppSettings v-if="settingsOpen" :sync-enabled="chat?.syncEnabled" :sync-error="chat?.syncError" @sync="chat?.setThreadSync($event)" :theme="theme" :error="themeError" :t3-connected="t3Connected" :t3-origin="chat?.origin" :t3-error="chat?.connectionError" :pair-t3="chat?.pair" :category="settingsCategory" @theme="setTheme" @close="settingsOpen = false; settingsCategory = 'appearance'" />
     <Teleport to="body">
       <CloseChatDialog
         v-if="closingChat"

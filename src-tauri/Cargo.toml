@@ -1,6 +1,6 @@
 [package]
 name = "gitgoblin"
-version = "0.1.9"
+version = "0.1.10"
 description = "A Git workbench with shared T3 Code conversations"
 edition = "2021"
 
@@ -19,3 +19,6 @@ sha2 = "0.10"
 
 tempfile = "3"
 keyring = { version = "3.6.3", features = ["windows-native", "apple-native", "sync-secret-service", "crypto-rust"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell"] }
