@@ -57,8 +57,9 @@ import {
   moveChatTab,
   openChatTab,
   restoreChatTabs,
+  reconcileChatTabs,
 } from "~/lib/chat-tabs";
-import { isThreadRunning, visibleThreads } from "~/lib/threads";
+import { isThreadRunning, isThreadSettled, isThreadSnoozed } from "~/lib/threads";
 import { desktop, invoke } from "~/lib/native";
 import {
   clampSidebarWidth,
@@ -584,6 +585,30 @@ const canCommit = computed(
 const threads = ref<T3Thread[]>([]),
   projects = ref<T3Project[]>([]),
   t3Connected = ref(false);
+const hideSnoozed = ref(true);
+const autoCloseSettled = ref(true);
+const snoozeClock = ref(Date.now());
+const listedThreads = computed(() => hideSnoozed.value
+  ? threads.value.filter(thread => !isThreadSnoozed(thread, snoozeClock.value))
+  : threads.value);
+watch([threads, hideSnoozed, snoozeClock], (_, __, cleanup) => {
+  if (!hideSnoozed.value) return;
+  let next = Infinity;
+  for (const thread of threads.value) {
+    const until = Date.parse(thread.snoozedUntil || "");
+    if (until > snoozeClock.value) next = Math.min(next, until);
+  }
+  if (Number.isFinite(next)) {
+    const timer = setTimeout(() => { snoozeClock.value = Date.now(); }, Math.min(next - Date.now(), 2147483647));
+    cleanup(() => clearTimeout(timer));
+  }
+});
+watch([hideSnoozed, autoCloseSettled], ([hide, close]) => {
+  try {
+    localStorage.setItem("gitgoblin.hideSnoozed", String(hide));
+    localStorage.setItem("gitgoblin.autoCloseSettled", String(close));
+  } catch { /* Preferences remain usable for this session. */ }
+});
 const chatTabs = ref(restoreChatTabs(null));
 const selectedThreadId = computed(() => chatTabs.value.selected);
 const chatNavigation = ref<{
@@ -659,7 +684,7 @@ function closeChat(id: string) {
     return;
   chatNavigation.value?.closePicker();
   const thread = threads.value.find((thread) => thread.id === id);
-  if (thread?.settledOverride === "settled") {
+  if (thread && isThreadSettled(thread)) {
     chatTabs.value = closeChatTab(chatTabs.value, id);
     return;
   }
@@ -695,7 +720,7 @@ function chatActions(thread: T3Thread): SidebarItem[] {
       disabled:
         !t3Connected.value ||
         example.value ||
-        thread.settledOverride === "settled" ||
+        isThreadSettled(thread) ||
         !!thread.archivedAt,
       run: () => chat.value?.settle(thread.id),
     },
@@ -1310,33 +1335,18 @@ async function editContext(text: string) {
   chat.value?.focusComposer();
 }
 function receiveThreads(ts: T3Thread[], ps: T3Project[], connected: boolean) {
-  const previous = threads.value;
   threads.value = ts;
   projects.value = ps;
   t3Connected.value = connected;
+}
+watch([listedThreads, autoCloseSettled, t3Connected], ([ts, close, connected], [previous, previouslyClosing]) => {
   if (!connected) return;
   const restoring = !tabsInitialized;
   tabsInitialized = true;
-  const known = new Set(restoring ? [] : visibleThreads(previous).map(thread => thread.id));
-  const ids = new Set(chatTabs.value.ids);
-  for (const thread of visibleThreads(ts)) {
-    if (!known.has(thread.id)) ids.add(thread.id);
-  }
-  if (ids.size !== chatTabs.value.ids.length) {
-    chatTabs.value = {
-      ids: [...ids],
-      selected: chatTabs.value.selected || visibleThreads(repoThreads.value)[0]?.id || [...ids][0]!,
-    };
-  }
-  for (const id of [...chatTabs.value.ids]) {
-    const thread = ts.find((thread) => thread.id === id);
-    if (
-      thread?.deletedAt ||
-      (!thread && (restoring || previous.some((thread) => thread.id === id)))
-    )
-      chatTabs.value = closeChatTab(chatTabs.value, id);
-  }
-}
+  chatTabs.value = reconcileChatTabs(chatTabs.value, ts, previous, repoThreads.value, {
+    restoring, close, previouslyClosing,
+  });
+});
 let currentChat = "";
 const chatViews = new Map<
   string,
@@ -1450,6 +1460,8 @@ function keydown(event: KeyboardEvent) {
 const preventBrowserMenu = (event: Event) => event.preventDefault();
 onMounted(() => {
   try {
+    hideSnoozed.value = localStorage.getItem("gitgoblin.hideSnoozed") !== "false";
+    autoCloseSettled.value = localStorage.getItem("gitgoblin.autoCloseSettled") !== "false";
     const savedTabs = localStorage.getItem("gitgoblin.chatTabs");
     chatTabs.value = restoreChatTabs(JSON.parse(savedTabs || "null"));
     const saved = JSON.parse(
@@ -1598,7 +1610,7 @@ onUnmounted(() => {
           ref="chatNavigation"
           :ids="chatTabs.ids"
           :selected="selectedThreadId"
-          :threads="threads"
+          :threads="listedThreads"
           :projects="projects"
           :activity="chatIndicators"
           :repository-name="w.repositoryName"
@@ -2152,6 +2164,7 @@ onUnmounted(() => {
         :repo="repo"
         :selected-thread-id="selectedThreadId"
         :open-thread-ids="chatTabs.ids"
+        :hide-snoozed="hideSnoozed" :auto-close-settled="autoCloseSettled"
         :worktrees="snapshot?.worktrees || []"
         @connect-t3="settingsCategory = 't3'; settingsOpen = true"
         @activity="chatActivityStates = $event"
@@ -2717,7 +2730,7 @@ onUnmounted(() => {
       </AppButton>
     </div>
     <ContextMenu ref="sidebarMenu" @error="error = $event" />
-    <AppSettings v-if="settingsOpen" :sync-enabled="chat?.syncEnabled" :sync-error="chat?.syncError" @sync="chat?.setThreadSync($event)" :theme="theme" :error="themeError" :t3-connected="t3Connected" :t3-origin="chat?.origin" :t3-error="chat?.connectionError" :pair-t3="chat?.pair" :category="settingsCategory" @theme="setTheme" @close="settingsOpen = false; settingsCategory = 'appearance'" />
+    <AppSettings v-if="settingsOpen" v-model:hide-snoozed="hideSnoozed" v-model:auto-close-settled="autoCloseSettled" :sync-enabled="chat?.syncEnabled" :sync-error="chat?.syncError" @sync="chat?.setThreadSync($event)" :theme="theme" :error="themeError" :t3-connected="t3Connected" :t3-origin="chat?.origin" :t3-error="chat?.connectionError" :pair-t3="chat?.pair" :category="settingsCategory" @theme="setTheme" @close="settingsOpen = false; settingsCategory = 'appearance'" />
     <Teleport to="body">
       <CloseChatDialog
         v-if="closingChat"

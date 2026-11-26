@@ -13,10 +13,18 @@ export const isThreadRunning = (thread: T3Thread) => !!thread.activeRunId || ['s
 
 const timestamp = (value?: string | null) => Date.parse(value || "") || 0;
 
+export function isThreadSnoozed(thread: T3Thread, now = Date.now()) {
+  return timestamp(thread.snoozedUntil) > now;
+}
+
+export function isThreadSettled(thread: T3Thread) {
+  return thread.settledOverride === "settled" || (!thread.settledOverride && !!thread.settledAt);
+}
+
 // Match T3's pinned and active sidebar ordering, independent of stream arrival.
 export function visibleThreads(threads: T3Thread[]): T3Thread[] {
   return threads.filter((thread) =>
-    thread.settledOverride !== "settled" && !thread.archivedAt && !thread.deletedAt,
+    !isThreadSettled(thread) && !thread.archivedAt && !thread.deletedAt,
   ).sort((a, b) => {
     const pinned = !!a.pinnedAt;
     if (pinned !== !!b.pinnedAt) return pinned ? -1 : 1;

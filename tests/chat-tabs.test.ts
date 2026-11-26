@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { chatActivity, chatHistory, chatState, closeChatTab, moveChatTab, openChatTab, restoreChatTabs, updateChatActivities } from '../app/lib/chat-tabs';
+import { chatActivity, chatHistory, chatState, reconcileChatTabs, closeChatTab, moveChatTab, openChatTab, restoreChatTabs, updateChatActivities } from '../app/lib/chat-tabs';
 import type { T3Projection, T3Thread } from '../app/lib/types';
 
 it('only scans changed conversations and drops unsubscribed activity states', () => {
@@ -72,4 +72,15 @@ it('tracks approvals, legacy questions and changing assistant responses independ
   const streaming = chatActivity(projection).response;
   projection.messages[0]!.streaming = false;
   expect(chatActivity(projection).response).not.toBe(streaming);
+});
+
+it('closes newly settled tabs when enabled and allows a deliberate history reopen', () => {
+  const active = [{ id: 'a' }, { id: 'b' }] as T3Thread[];
+  const settled = [{ ...active[0], settledAt: '2026-11-01' }, active[1]] as T3Thread[];
+  const state = { ids: ['a', 'b'], selected: 'a' };
+  const opts = { restoring: false, close: true, previouslyClosing: true };
+  expect(reconcileChatTabs(state, settled, active, [], opts)).toEqual({ ids: ['b'], selected: 'b' });
+  expect(reconcileChatTabs(state, settled, active, [], { ...opts, close: false })).toEqual(state);
+  expect(reconcileChatTabs(state, settled, settled, [], opts)).toEqual(state);
+  expect(reconcileChatTabs(state, settled, settled, [], { ...opts, previouslyClosing: false }).ids).toEqual(['b']);
 });

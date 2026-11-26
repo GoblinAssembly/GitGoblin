@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import { CheckCheck, LoaderCircle, X } from "lucide-vue-next";
+import { isThreadSettled } from "~/lib/threads";
 import type { T3Thread } from "~/lib/types";
 
 const props = defineProps<{
@@ -14,7 +15,7 @@ const settle = ref(true),
   submitting = ref(false),
   error = ref("");
 const alreadySettled = computed(
-  () => props.thread.settledOverride === "settled" || !!props.thread.archivedAt,
+  () => isThreadSettled(props.thread) || !!props.thread.archivedAt,
 );
 const willSettle = computed(() => settle.value && !alreadySettled.value);
 let trigger: HTMLElement | null;

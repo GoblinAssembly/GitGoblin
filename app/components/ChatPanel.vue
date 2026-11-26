@@ -61,7 +61,7 @@ import {
   defaultConversationModel,
 } from "~/lib/chat-models";
 import { T3Client, parsePairing } from "~/lib/t3";
-import { threadForWindowTitles } from "~/lib/threads";
+import { isThreadSettled, isThreadSnoozed, threadForWindowTitles } from "~/lib/threads";
 import { invoke, desktop, git } from "~/lib/native";
 import type {
   T3Thread,
@@ -77,6 +77,8 @@ const props = defineProps<{
   repo: string;
   visible: boolean;
   selectedThreadId: string;
+  hideSnoozed?: boolean;
+  autoCloseSettled?: boolean;
   openThreadIds: string[];
   worktrees: { path: string; branch: string }[];
 }>();
@@ -518,6 +520,9 @@ watch([connected, syncEnabled, origin], ([online, enabled], _, cleanup) => {
       const titles = await invoke<string[]>("t3_window_titles");
       if (stopped || revision !== navigationRevision) return;
       const id = threadForWindowTitles(titles, threads.value, projects.value);
+      const thread = threads.value.find(t => t.id === id);
+      if (thread && ((props.hideSnoozed && isThreadSnoozed(thread))
+        || (props.autoCloseSettled && isThreadSettled(thread)))) { lastWindowId = ""; return; }
       if (id && id !== lastWindowId && id !== selectedId.value) {
         incomingId.value = id;
         select(id);

@@ -1,3 +1,4 @@
+import { isThreadSettled, visibleThreads } from './threads';
 import type { T3Projection, T3Thread } from './types';
 import { pendingQuestions } from './chat-questions';
 
@@ -20,6 +21,32 @@ export function openChatTab(state: ChatTabsState, id: string): ChatTabsState {
 export function closeChatTab(state: ChatTabsState, id: string): ChatTabsState {
   const index = state.ids.indexOf(id), ids = state.ids.filter(value => value !== id);
   return { ids, selected: state.selected === id ? ids[Math.min(index, ids.length - 1)] || '' : state.selected };
+}
+export function reconcileChatTabs(state: ChatTabsState, ts: T3Thread[], previous: T3Thread[],
+  repositoryThreads: T3Thread[], { restoring, close, previouslyClosing }: {
+    restoring: boolean; close: boolean; previouslyClosing: boolean;
+  }): ChatTabsState {
+  const known = new Map(previous.map(thread => [thread.id, thread]));
+  const available = visibleThreads(ts);
+  const current = new Map(ts.map(thread => [thread.id, thread]));
+  for (const id of state.ids) {
+    const thread = current.get(id);
+    const old = known.get(id);
+    if (!thread || thread.deletedAt || (close && isThreadSettled(thread)
+      && (restoring || !previouslyClosing || !old || !isThreadSettled(old)))) {
+      state = closeChatTab(state, id);
+    }
+  }
+  const ids = new Set(state.ids);
+  for (const thread of available) {
+    const old = known.get(thread.id);
+    if (restoring || !old || old.archivedAt || old.deletedAt || isThreadSettled(old)) ids.add(thread.id);
+  }
+  if (ids.size !== state.ids.length) {
+    const repoIds = new Set(repositoryThreads.map(thread => thread.id));
+    state = { ids: [...ids], selected: state.selected || available.find(thread => repoIds.has(thread.id))?.id || [...ids][0]! };
+  }
+  return state;
 }
 export function moveChatTab(state: ChatTabsState, id: string, target: string): ChatTabsState {
   if (id === target || !state.ids.includes(id) || !state.ids.includes(target)) return state;

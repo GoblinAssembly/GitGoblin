@@ -1,3 +1,4 @@
+import { isThreadSnoozed } from "../app/lib/threads";
 import { expect, it } from "vitest";
 import { isThreadRunning, repositoryThreads, repositoryThreadSelection, threadForWindowTitles, visibleThreads } from "../app/lib/threads";
 import type { T3Thread } from "../app/lib/types";
@@ -64,4 +65,12 @@ it("follows unique T3 window titles and ignores ambiguous or missing matches", (
   expect(threadForWindowTitles(["Running: Review changes - GitGoblin"], [first], projects)).toBe("first");
   expect(threadForWindowTitles(window, [first, second], projects)).toBe("");
   expect(threadForWindowTitles([], [first], projects)).toBe("");
+});
+
+it("shows snoozed chats again at their wake time", () => {
+  const wake = "2026-11-26T13:00:00Z";
+  const item = thread("snoozed", { snoozedUntil: wake });
+  expect(isThreadSnoozed(item, Date.parse(wake) - 1)).toBe(true);
+  expect(isThreadSnoozed(item, Date.parse(wake))).toBe(false);
+  expect(isThreadSnoozed(thread("legacy"))).toBe(false);
 });

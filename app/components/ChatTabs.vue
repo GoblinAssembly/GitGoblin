@@ -3,7 +3,7 @@ import { TabsList, TabsRoot, TabsTrigger } from "reka-ui";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { ChevronDown, Folder, MessageSquare, Search, X } from "lucide-vue-next";
 import type { T3Project, T3Thread } from "~/lib/types";
-import { isThreadRunning, repositoryThreadKey, visibleThreads } from "~/lib/threads";
+import { isThreadRunning, isThreadSettled, repositoryThreadKey, visibleThreads } from "~/lib/threads";
 import type { ContextMenuHandle, ContextMenuItem } from "~/lib/context-menu";
 const props = defineProps<{
   ids: string[];
@@ -226,13 +226,13 @@ defineExpose({ openAll, closePicker: () => (pickerOpen.value = false) });
                   :running="isThreadRunning(thread)"
                   :status="thread.status"
                   :completed="
-                    thread.settledOverride === 'settled' ||
+                    isThreadSettled(thread) ||
                     activity[thread.id]?.completed
                   "
                 />
                 <span
                   class="tab-label grid min-w-0 [&_small]:overflow-hidden [&_small]:whitespace-nowrap [&_small]:text-ellipsis [&_strong]:overflow-hidden [&_strong]:whitespace-nowrap [&_strong]:text-ellipsis [&_small]:text-[10px] [&_small]:leading-[12px] [&_small]:text-[var(--fg-secondary)] [&_strong]:text-[12px] [&_strong]:leading-[15px] [&_strong]:font-medium [&_strong]:text-[var(--fg)] gap-[1px]"
-                  ><strong :class="{ 'line-through': thread.settledOverride === 'settled' }">{{ thread.title }}</strong
+                  ><strong :class="{ 'line-through': isThreadSettled(thread) }">{{ thread.title }}</strong
                   ><small class="[:where(&)]:text-[11px]"
                     ><Folder
                       :size="11"
@@ -355,18 +355,18 @@ defineExpose({ openAll, closePicker: () => (pickerOpen.value = false) });
                     :running="isThreadRunning(thread)"
                     :status="thread.status"
                     :completed="
-                      thread.settledOverride === 'settled' ||
+                      isThreadSettled(thread) ||
                       activity[thread.id]?.completed
                     "
                   />
                   <span
-                    ><strong :class="{ 'line-through': thread.settledOverride === 'settled' }">{{ thread.title }}</strong
+                    ><strong :class="{ 'line-through': isThreadSettled(thread) }">{{ thread.title }}</strong
                     ><small class="[:where(&)]:text-[11px]"
                       >{{ worktree(thread)
                       }}{{
                         thread.archivedAt
                           ? " · Archived"
-                          : thread.settledOverride === "settled"
+                          : isThreadSettled(thread)
                             ? " · Completed"
                             : ""
                       }}</small

@@ -93,6 +93,8 @@ export interface T3Project {
   defaultModelSelection?: T3ModelSelection | null;
 }
 export interface T3Thread {
+  snoozedUntil?: string | null;
+  settledAt?: string | null;
   settledOverride?: "settled" | "active" | null;
   archivedAt?: string | null;
   deletedAt?: string | null;
