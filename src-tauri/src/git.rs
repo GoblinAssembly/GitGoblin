@@ -382,8 +382,77 @@ fn history(repo: &Path, path: &str, search: &str, offset: usize, limit: Option<u
 }
 
 pub fn is_read_only(action: &str) -> bool {
-    matches!(action, "discard-plan" | "snapshot" | "status" | "refresh" | "history" | "diff" | "branch-files" | "commit-diff"
+    matches!(action, "cleanup-plan" | "discard-plan" | "snapshot" | "status" | "refresh" | "history" | "diff" | "branch-files" | "commit-diff"
         | "commit-message" | "reflog" | "blame" | "conflict" | "rebase-plan" | "image-diff" | "markdown-preview")
+}
+
+#[derive(Serialize, Deserialize, PartialEq)]
+struct CleanupPlan {
+    branches: Vec<(String, String)>,
+    worktrees: Vec<String>,
+    folders: Vec<String>,
+    owners: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Deserialize)]
+struct CleanupSelection {
+    branches: Vec<String>,
+    folders: Vec<String>,
+    worktrees: Vec<String>,
+}
+
+fn cleanup_plan(repo: &Path) -> Result<CleanupPlan, String> {
+    let mut branches = Vec::new();
+    let mut folders = Vec::new();
+    let trees = git(repo, &["worktree", "list", "--porcelain", "-z"])?;
+    let mut owners = std::collections::BTreeMap::new();
+    let mut worktrees = Vec::new();
+    for block in trees.split("\0\0").skip(1) {
+        let fields = || block.split('\0');
+        if fields().any(|f| f == "locked" || f.starts_with("locked ")) { continue; }
+        if let Some(path) = fields().find_map(|f| f.strip_prefix("worktree ")) {
+            if fields().any(|f| f == "prunable" || f.starts_with("prunable "))
+                && fs::symlink_metadata(path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
+                worktrees.push(path.to_owned());
+            }
+            if let Some(name) = fields().find_map(|f| f.strip_prefix("branch refs/heads/")) {
+                owners.insert(path.to_owned(), name.to_owned());
+            }
+        }
+    }
+    let refs = git(repo, &["for-each-ref", "--sort=refname",
+        "--format=%(refname:lstrip=2)%00%(objectname)%00%(upstream)%00%(upstream:track)%00%(symref)", "refs/heads"])?;
+    for row in refs.lines() {
+        let columns: Vec<_> = row.split('\0').collect();
+        let [name, tip, upstream, tracking, ""] = columns.as_slice() else { continue };
+        if !upstream.is_empty() && *tracking != "[gone]" { continue; }
+        let branch_field = format!("branch refs/heads/{name}");
+        let mut linked = Vec::new();
+        let mut protected = false;
+        for (index, block) in trees.split("\0\0").enumerate() {
+            let fields = || block.split('\0');
+            if !fields().any(|f| f == branch_field) { continue; }
+            let path = fields().find_map(|f| f.strip_prefix("worktree ")).ok_or("Missing worktree path.")?;
+            if index == 0 || fields().any(|f| f == "locked" || f.starts_with("locked ")) {
+                protected = true;
+                break;
+            }
+            if worktrees.iter().any(|tree| tree == path) { continue; }
+            let dir = Path::new(path);
+            if fs::canonicalize(dir).map_err(|e| e.to_string())? == repo
+                || !git(dir, &["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"])?.is_empty() {
+                protected = true;
+                break;
+            }
+            linked.push(path.to_owned());
+        }
+        if !protected {
+            folders.extend(linked);
+            branches.push((name.to_string(), tip.to_string()));
+        }
+    }
+    worktrees.sort();
+    Ok(CleanupPlan { branches, worktrees, folders, owners })
 }
 
 fn worktrees(repo: &Path) -> Result<Vec<Value>, String> {
@@ -641,6 +710,33 @@ pub fn execute_checked(req: Request, check: impl Fn() -> Result<(), String>) -> 
             }
             let out = bytes(&repo, &args, Some(req.text.as_bytes()))?;
             json!(String::from_utf8_lossy(&out))
+        }
+        "cleanup-plan" => json!(cleanup_plan(&repo)?),
+        "cleanup" => {
+            let approved: CleanupPlan = serde_json::from_str(&req.text).map_err(|_| "Preview cleanup first.")?;
+            if cleanup_plan(&repo)? != approved {
+                return Err("Cleanup candidates changed. Open Cleanup again to review them.".into());
+            }
+            let selected: CleanupSelection = serde_json::from_str(&req.target).map_err(|_| "Choose cleanup items first.")?;
+            if selected.branches.iter().any(|name| !approved.branches.iter().any(|(branch, _)| branch == name))
+                || selected.folders.iter().any(|p| !approved.folders.contains(p))
+                || selected.worktrees.iter().any(|p| !approved.worktrees.contains(p)) {
+                return Err("Choose items from the cleanup preview.".into());
+            }
+            for (path, branch) in &approved.owners {
+                if selected.branches.contains(branch) && !selected.folders.contains(path) && !selected.worktrees.contains(path) {
+                    return Err("Select the linked worktree before deleting its branch.".into());
+                }
+            }
+            for path in selected.worktrees.iter().chain(&selected.folders) {
+                git(&repo, &["worktree", "remove", "--", path])?;
+            }
+            for (name, tip) in &approved.branches {
+                if !selected.branches.contains(name) { continue; }
+                if oid(&repo, &format!("refs/heads/{name}"))? != *tip { return Err("Branch changed. Review cleanup again.".into()); }
+                git(&repo, &["branch", "-D", "--", name])?;
+            }
+            json!("Local cleanup complete.")
         }
         "fetch" => json!(git(&repo, &["fetch", "--all", "--prune"])?),
         "pull" => json!(git(&repo, &["pull", "--ff-only", "--autostash"])?),
@@ -1131,6 +1227,48 @@ mod tests {
         });
         assert_eq!(result.unwrap_err(), "Diff request superseded");
         assert_eq!(calls.get(), 3);
+    }
+
+    #[test]
+    fn cleanup_requires_current_preview_and_prunes_missing_worktree() {
+        let dir = fixture();
+        let repo = dir.path();
+        git(repo, &["commit", "--allow-empty", "-m", "initial"]).unwrap();
+        git(repo, &["branch", "unused"]).unwrap();
+        let tree = repo.join("temporary");
+        git(repo, &["worktree", "add", "--detach", tree.to_str().unwrap()]).unwrap();
+        git(&tree, &["checkout", "-b", "linked"]).unwrap();
+        git(&tree, &["commit", "--allow-empty", "-m", "unmerged"]).unwrap();
+        fs::write(tree.join("pending"), "keep").unwrap();
+        assert!(cleanup_plan(repo).unwrap().folders.is_empty());
+        fs::remove_file(tree.join("pending")).unwrap();
+        let linked = cleanup_plan(repo).unwrap();
+        assert_eq!(linked.folders.len(), 1);
+        assert!(linked.branches.iter().any(|(name, _)| name == "linked"));
+        let mut apply = request(repo, "cleanup");
+        apply.target = json!({"branches":["linked"],"folders":linked.folders,"worktrees":[]}).to_string();
+        apply.text = serde_json::to_string(&linked).unwrap();
+        execute(apply).unwrap();
+        assert!(!tree.exists());
+        assert!(oid(repo, "refs/heads/linked").is_err());
+        assert!(oid(repo, "refs/heads/unused").is_ok());
+        git(repo, &["worktree", "add", "--detach", tree.to_str().unwrap()]).unwrap();
+        assert!(cleanup_plan(repo).unwrap().worktrees.is_empty());
+        fs::remove_dir_all(tree).unwrap();
+        let plan = execute(request(repo, "cleanup-plan")).unwrap();
+        assert_eq!(plan["branches"][0][0], "unused");
+        assert_eq!(plan["worktrees"].as_array().unwrap().len(), 1);
+        let mut apply = request(repo, "cleanup");
+        apply.target = json!({"branches":["unused"],"folders":[],"worktrees":plan["worktrees"]}).to_string();
+        apply.text = plan.to_string();
+        git(repo, &["branch", "extra"]).unwrap();
+        assert!(execute(apply).is_err());
+        let mut apply = request(repo, "cleanup");
+        apply.target = json!({"branches":["extra","unused"],"folders":[],"worktrees":plan["worktrees"]}).to_string();
+        apply.text = execute(request(repo, "cleanup-plan")).unwrap().to_string();
+        execute(apply).unwrap();
+        let after = cleanup_plan(repo).unwrap();
+        assert!(after.branches.is_empty() && after.worktrees.is_empty());
     }
 
     pub(super) fn fixture() -> tempfile::TempDir {

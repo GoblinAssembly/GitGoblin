@@ -35,6 +35,7 @@ import {
   ListTree,
   Tag,
   Archive,
+  Brush,
   Globe,
   MoreHorizontal,
   Circle,
@@ -802,6 +803,65 @@ const resetModeDescriptions: Record<string, string> = {
   hard: "Move the branch to the selected commit and replace tracked files with that commit’s contents. Discard all staged and unstaged changes to tracked files. Untracked files that block the reset may also be deleted. Uncommitted changes cannot be recovered through reflog.",
 };
 const discardFiles = ref<NonNullable<GitRequest["files"]>>([]);
+type CleanupPlan = { branches: [string, string][]; worktrees: string[]; folders: string[]; owners: Record<string, string> };
+const cleanup = ref<CleanupPlan>({ branches: [], worktrees: [], folders: [], owners: {} });
+const cleanupGroups = computed(() => [
+  { kind: "branches" as const, title: "Branches to delete", icon: GitBranch, items: cleanup.value.branches.map(([name]) => name) },
+  { kind: "folders" as const, title: "Worktree folders to delete", icon: FolderOpen, items: cleanup.value.folders },
+  { kind: "worktrees" as const, title: "Worktree registrations to prune", icon: FolderGit2, items: cleanup.value.worktrees },
+].filter(group => group.items.length));
+type CleanupKind = "branches" | "folders" | "worktrees";
+type CleanupRow = { kind: CleanupKind; name: string; owner?: string; nested?: boolean };
+const cleanupRows = computed(() => {
+  const families = new Map<string, CleanupRow[]>();
+  for (const [name] of cleanup.value.branches) families.set(name, [{ kind: "branches", name }]);
+  const standalone: CleanupRow[] = [];
+  for (const kind of ["folders", "worktrees"] as const) {
+    for (const name of cleanup.value[kind]) {
+      const owner = cleanup.value.owners[name];
+      const family = families.get(owner ?? "");
+      if (family) family.push({ kind, name, owner, nested: true });
+      else standalone.push({ kind, name, owner });
+    }
+  }
+  return [...Array.from(families.values()).flat(), ...standalone];
+});
+const selectedCleanup = ref<Record<CleanupKind, string[]>>({ branches: [], folders: [], worktrees: [] });
+const selectedCount = computed(() => Object.values(selectedCleanup.value).reduce((n, items) => n + items.length, 0));
+const emptyCleanup = computed(() => dialog.value === "cleanup" && !cleanupGroups.value.length);
+const cleanupCount = computed(() => cleanupGroups.value.reduce((n, group) => n + group.items.length, 0));
+function selectAllCleanup(checked: boolean) {
+  selectedCleanup.value = { branches: [], folders: [], worktrees: [] };
+  if (checked) {
+    for (const group of cleanupGroups.value) selectedCleanup.value[group.kind] = [...group.items];
+  }
+}
+function selectCleanup(kind: CleanupKind, item: string, checked: boolean) {
+  const selection = selectedCleanup.value;
+  selection[kind] = checked ? [...selection[kind], item] : selection[kind].filter(value => value !== item);
+  if (kind === "branches" && checked) {
+    for (const group of ["folders", "worktrees"] as const) {
+      selection[group] = cleanup.value[group].filter(path =>
+        selection[group].includes(path) || cleanup.value.owners[path] === item);
+    }
+  } else if (kind !== "branches" && !checked) {
+    selection.branches = selection.branches.filter(name => name !== cleanup.value.owners[item]);
+  }
+}
+const cleanupRepo = ref("");
+async function reviewCleanup() {
+  const root = repo.value;
+  try {
+    const plan = await w.read<CleanupPlan>("cleanup-plan");
+    if (repo.value !== root) return;
+    cleanup.value = plan;
+    selectAllCleanup(false);
+    cleanupRepo.value = root;
+    ask("cleanup");
+  } catch (e) {
+    error.value = String(e);
+  }
+}
 const discardRepo = ref("");
 async function confirmDiscard(paths: string[]) {
   if (busy.value || example.value || !paths.length) return;
@@ -832,6 +892,10 @@ const definitions: Record<
     defaults?: Record<string, string>;
   }
 > = {
+  cleanup: {
+    title: "Review local cleanup",
+    description: "Cleanup affects only this local repository.",
+  },
   "discard-files": { title: "Discard changes", description: "" },
   "branch-create": {
     title: "Create branch",
@@ -1062,16 +1126,16 @@ async function executeDialog() {
   dialogError.value = "";
   try {
     if (
-      dialog.value === "worktree-remove" &&
+      (dialog.value === "worktree-remove" || dialog.value === "cleanup") &&
       threads.value.some(
         (thread) =>
           thread.activeRunId &&
-          normalized(
+          (dialog.value === "cleanup" ? selectedCleanup.value.folders : [values.value.path || ""]).some(path => normalized(
             thread.worktreePath ||
               projects.value.find((project) => project.id === thread.projectId)
                 ?.workspaceRoot ||
               "",
-          ) === normalized(values.value.path || ""),
+          ) === normalized(path)),
       )
     ) {
       throw new Error("Stop the agent using this worktree before removing it.");
@@ -1092,6 +1156,12 @@ async function executeDialog() {
         mode: values.value.mode,
         pushTags: values.value.pushTags === "yes",
       };
+    }
+    if (dialog.value === "cleanup") {
+      if (repo.value !== cleanupRepo.value) throw new Error("Open Cleanup again for this repository.");
+      if (!selectedCount.value) return;
+      params.target = JSON.stringify(selectedCleanup.value);
+      params.text = JSON.stringify(cleanup.value);
     }
     if (dialog.value === "discard-files") {
       if (repo.value !== discardRepo.value)
@@ -1651,6 +1721,9 @@ onUnmounted(() => {
           class="toolbar-actions flex items-center gap-[3px] [&>button]:text-[11px] [&>button]:text-[var(--fg-secondary)] [&>button]:py-[5px] [&>button]:px-[8px] [@media(max-width:1400px)]:[&>button>span]:hidden"
           aria-label="Git actions"
         >
+          <AppButton title="Preview local cleanup" :disabled="busy || example" @click="reviewCleanup">
+            <Brush :size="15" /><span>Cleanup</span>
+          </AppButton>
           <AppButton
             title="Fetch remote changes"
             :disabled="busy || example"
@@ -2712,13 +2785,33 @@ onUnmounted(() => {
       </AppDialog>
       <AppDialog
         v-if="dialog"
-        :title="dialogTitle"
+        :title="emptyCleanup ? 'Nothing to clean up' : dialogTitle"
         :dismissible="!busy"
         @close="dialog = ''"
       >
-        <AppDialogPanel
-          class="modal w-[470px] max-w-full max-h-[90vh] overflow-auto p-[22px]"
-          :class="[{ 'modal-wide': rebaseCommits.length }]"
+        <AppDialogPanel v-if="emptyCleanup" class="w-[380px] max-w-full p-6">
+          <svg viewBox="0 0 122 40" width="122" height="40" fill="none" aria-hidden="true" class="mb-4">
+            <g stroke-width="2">
+              <path d="M8 28H100" stroke="var(--line)" />
+              <path d="M24 28C37 28 35 10 50 10H62C77 10 75 28 90 28" stroke="var(--accent)" />
+              <g fill="var(--panel)" stroke="var(--accent)">
+                <circle cx="24" cy="28" r="3.5" /><circle cx="56" cy="10" r="3.5" />
+              </g>
+              <circle cx="103" cy="28" r="10" fill="var(--accent)" />
+              <path d="m98.5 28 3 3 6-6" stroke="var(--on-accent)" stroke-linecap="round" stroke-linejoin="round" />
+            </g>
+          </svg>
+          <h2 class="text-[20px] leading-tight font-semibold">Nothing to clean up</h2>
+          <div class="mt-2 text-[13px] leading-5 text-[var(--fg-secondary)]">
+            No local branches or worktrees are eligible for removal.
+          </div>
+          <div class="mt-5 flex justify-end">
+            <AppButton class="border-[var(--line)] bg-[var(--bg)] px-4" @click="dialog = ''">Close</AppButton>
+          </div>
+        </AppDialogPanel>
+        <AppDialogPanel v-else
+          class="modal max-w-full max-h-[90vh] overflow-auto p-[22px]"
+          :class="[dialog === 'cleanup' ? 'w-[760px]' : 'w-[470px]', { 'modal-wide': rebaseCommits.length }]"
           aria-labelledby="action-title"
         >
           <AppDialogHeader class="modal-heading">
@@ -2739,6 +2832,38 @@ onUnmounted(() => {
             </AppButton>
           </AppDialogHeader>
           <p>{{ dialogDescription }}</p>
+          <div v-if="dialog === 'cleanup'" class="grid gap-5">
+            <label v-if="cleanupCount" class="my-0! flex-row! cursor-pointer items-center gap-2.5 px-3 text-[13px]!">
+              <input type="checkbox" class="size-4! shrink-0 accent-[var(--accent)]" :disabled="busy" :checked="selectedCount === cleanupCount"
+                :indeterminate="selectedCount > 0 && selectedCount < cleanupCount"
+                @change="selectAllCleanup(($event.target as HTMLInputElement).checked)" />
+              Select all
+              <span class="ml-auto text-[var(--fg-secondary)]">{{ selectedCount }} of {{ cleanupCount }} selected</span>
+            </label>
+            <section v-if="cleanupCount" aria-label="Local items to remove">
+              <ul class="max-h-[48vh] overflow-auto rounded-md border border-[var(--line)] bg-[var(--bg)]">
+                <li v-for="row in cleanupRows" :key="row.kind + row.name"
+                  :class="row.nested ? 'relative before:absolute before:left-5 before:top-0 before:h-4 before:w-3 before:rounded-bl before:border-b before:border-l before:border-[var(--line)]' : '[&:not(:first-child)]:border-t border-[var(--line)]'">
+                  <label class="my-0! flex-row! cursor-pointer items-start gap-2.5 py-2 pr-3 hover:bg-[var(--panel)] has-checked:bg-[var(--selection)]"
+                    :class="row.nested ? 'pl-10' : 'pl-3'">
+                    <input type="checkbox" class="mt-0.5 size-4! shrink-0 accent-[var(--accent)]" :disabled="busy"
+                      :checked="selectedCleanup[row.kind].includes(row.name)"
+                      @change="selectCleanup(row.kind, row.name, ($event.target as HTMLInputElement).checked)" />
+                    <component :is="row.kind === 'branches' ? GitBranch : FolderGit2" :size="15" aria-hidden="true"
+                      class="mt-0.5 shrink-0 text-[var(--fg-secondary)]" />
+                    <span class="grid min-w-0 gap-0.5 [overflow-wrap:anywhere]">
+                      <span v-if="row.kind !== 'branches'" class="text-[11px] font-medium leading-5 text-[var(--fg-secondary)]">
+                        {{ row.kind === 'folders' ? 'Delete worktree folder' : 'Prune worktree registration' }}
+                        <span v-if="row.owner" :class="{ 'sr-only': row.nested }"> for {{ row.owner }}</span>
+                      </span>
+                      <span v-else class="sr-only">Delete local branch</span>
+                      <code :class="row.kind === 'branches' ? 'text-[13px] text-[var(--fg)]' : 'text-xs text-[var(--fg-secondary)]'" class="leading-5">{{ row.name }}</code>
+                    </span>
+                  </label>
+                </li>
+              </ul>
+            </section>
+          </div>
           <div
             v-if="activeAgents.length"
             class="agent-warning flex items-start gap-[10px] border-[1px] border-solid border-[var(--line)] bg-[var(--warning-bg)] p-[12px] rounded-[6px] text-[var(--warning)] text-[11px] [&_p]:text-[10px] [&_p]:leading-[1.7] [&_p]:my-[7px] [&_p]:mx-0"
@@ -2962,6 +3087,7 @@ onUnmounted(() => {
                   [
                     {
                       danger:
+                        dialog === 'cleanup' ||
                         dialog === 'discard-files' ||
                         dialog === 'branch-delete' ||
                         (dialog === 'push' && values.mode === 'force') ||
@@ -2969,7 +3095,7 @@ onUnmounted(() => {
                     },
                   ],
                 ]"
-                :disabled="busy || example || (dialog === 'push' && !pushDestination) || (dialog === 'branch-rename' && !branchRenameReady)"
+                :disabled="busy || example || (dialog === 'cleanup' && !selectedCount) || (dialog === 'push' && !pushDestination) || (dialog === 'branch-rename' && !branchRenameReady)"
               >
                 {{
                   busy
@@ -2984,7 +3110,7 @@ onUnmounted(() => {
                             : "Push"
                           : dialog === "branch-rename"
                             ? "Rename"
-                            : dialogTitle
+                            : dialog === "cleanup" ? "Remove selected" : dialogTitle
                 }}
               </AppButton>
             </AppDialogFooter>
