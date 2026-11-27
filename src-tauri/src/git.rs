@@ -401,6 +401,22 @@ struct CleanupSelection {
     worktrees: Vec<String>,
 }
 
+fn remove_leftover_folder(repo: &Path, path: &str, error: String) -> Result<(), String> {
+    let folder = Path::new(path);
+    let expected = format!("error: failed to delete '{path}': Directory not empty");
+    if !error.lines().any(|line| line == expected)
+        || !fs::symlink_metadata(folder.join(".git")).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+    {
+        return Err(error);
+    }
+    let entry = format!("worktree {path}");
+    let trees = git(repo, &["worktree", "list", "--porcelain", "-z"])?;
+    if trees.split('\0').any(|field| field == entry) {
+        return Err(error);
+    }
+    fs::remove_dir_all(folder).map_err(|e| format!("Could not remove {path}: {e}"))
+}
+
 fn cleanup_plan(repo: &Path) -> Result<CleanupPlan, String> {
     let mut branches = Vec::new();
     let mut folders = Vec::new();
@@ -729,7 +745,10 @@ pub fn execute_checked(req: Request, check: impl Fn() -> Result<(), String>) -> 
                 }
             }
             for path in selected.worktrees.iter().chain(&selected.folders) {
-                git(&repo, &["worktree", "remove", "--", path])?;
+                if let Err(error) = git(&repo, &["worktree", "remove", "--", path]) {
+                    if !approved.folders.contains(path) { return Err(error); }
+                    remove_leftover_folder(&repo, path, error)?;
+                }
             }
             for (name, tip) in &approved.branches {
                 if !selected.branches.contains(name) { continue; }
@@ -1227,6 +1246,24 @@ mod tests {
         });
         assert_eq!(result.unwrap_err(), "Diff request superseded");
         assert_eq!(calls.get(), 3);
+    }
+
+    #[test]
+    fn cleanup_removes_nonempty_leftover_after_git_unregisters_worktree() {
+        let dir = fixture();
+        let repo = dir.path();
+        git(repo, &["commit", "--allow-empty", "-m", "initial"]).unwrap();
+        let tree = repo.join("leftover");
+        let path = tree.to_str().unwrap().replace('\\', "/");
+        git(repo, &["worktree", "add", "--detach", &path]).unwrap();
+        let error = format!("error: failed to delete '{path}': Directory not empty");
+        assert!(remove_leftover_folder(repo, &path, error.clone()).is_err());
+        git(repo, &["worktree", "remove", &path]).unwrap();
+        fs::create_dir_all(tree.join("nested")).unwrap();
+        fs::write(tree.join("nested/file"), "leftover").unwrap();
+        assert!(remove_leftover_folder(repo, &path, "another failure".into()).is_err());
+        remove_leftover_folder(repo, &path, error).unwrap();
+        assert!(!tree.exists());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 [package]
 name = "gitgoblin"
-version = "0.1.12"
+version = "0.1.13"
 description = "A Git workbench with shared T3 Code conversations"
 edition = "2021"
 
